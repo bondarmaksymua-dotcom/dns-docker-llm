@@ -1,73 +1,71 @@
-Projekt: DNS + Docker + LLM
+# README.md
 
-Síť
+## Projekt: Finanční AI asistent (DNS + Docker + LLM)
+
+## Co projekt dělá
+Tento projekt vytváří síťovou službu, která umožňuje uživatelům posílat finanční dotazy na AI model.
+Aplikace běží v Docker kontejneru a je dostupná přes vlastní doménu v lokální síti.
+
+## K čemu je projekt určen
+Projekt slouží jako finanční pomocník, který odpovídá na jednoduché otázky týkající se peněz (např. výpočty zůstatku).
+Zároveň demonstruje propojení DNS, DHCP a Docker aplikace v praxi.
+
+## Pro koho je určen
+Aplikaci mohou používat uživatelé v lokální síti (např. spolužáci).
+Uživatel zadá dotaz a AI vrátí krátkou odpověď.
+
+## Síťová konfigurace
 
 - Server IP: 192.168.100.1/24
-- Klient získává IP adresu přes DHCP
+- Klient získává IP přes DHCP
+- DNS:
+  maksym.skola.test → 192.168.100.1
 
-DHCP
+## Aplikace
 
-- Scope: 192.168.100.100–192.168.100.200/24
-- Option 006 (DNS): 192.168.100.1
-
-DNS
-
-- Zóna: skola.test
-- A záznam: maksym.skola.test → 192.168.100.1
-
----
-
-Aplikace
-
-- Aplikace běží v Docker kontejneru
+- Běží v Docker kontejneru
 - Port: 8081
 
-Endpointy
+### Endpointy:
+- /ping – test dostupnosti
+- /status – stav aplikace
+- /ai – finanční dotazy na AI
 
-- "/ping" – test dostupnosti
-- "/status" – informace o aplikaci
-- "/ai" – komunikace s LLM
+## Technologie
 
----
+- Ubuntu Server
+- Docker + docker-compose
+- Python + Flask
+- DNS + DHCP
+- Ollama (LLM model)
 
-Firewall
-
-- Povolen port 8081/tcp
-
----
-
-Spuštění
+## Spuštění projektu
 
 docker compose up -d --build
 
----
+## Testování
 
-Test funkčnosti
+### DNS:
+nslookup maksym.skola.test
 
+### Ping:
 ping maksym.skola.test
+
+### Aplikace:
 curl http://maksym.skola.test:8081/ping
 curl http://maksym.skola.test:8081/status
 
----
+## Test AI
 
-Test AI
+curl -X POST http://maksym.skola.test:8081/ai -H "Content-Type: application/json" -d '{"prompt":"Mám 500 Kč a koupím si věc za 320 Kč. Kolik mi zbyde?"}'
 
-curl -X POST http://maksym.skola.test:8081/ai \
--H "Content-Type: application/json" \
--d '{"prompt":"Mam 500 Kc a koupim si vec za 320 Kc. Kolik mi zbyde?"}'
+## Video
 
----
-
-Vysvětlení
-
-DNS přeloží doménové jméno maksym.skola.test na IP adresu serveru (192.168.100.1).
-Na této IP a portu 8081 běží aplikace v Docker kontejneru.
-Aplikace komunikuje s lokálním LLM (Ollama), který zpracuje dotaz a vrátí odpověď.
-
----
-
-Video demo
-
-Ukázka funkčnosti projektu (DNS, Docker, LLM):
-
+Odkaz na demonstrační video:
 (https://drive.google.com/file/d/1tlWjFGYoi0fWXyXMQ2dhSfpI0si2BEMA/view?usp=sharing)
+
+## Vysvětlení
+
+DNS překládá doménu maksym.skola.test na IP adresu serveru 192.168.100.1.
+Na této adrese běží Docker aplikace na portu 8081, která zpracuje požadavek a předá ho AI modelu (Ollama).
+Model vrátí odpověď uživateli.
