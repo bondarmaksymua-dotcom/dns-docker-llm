@@ -3,10 +3,8 @@ services:
     build: .
     ports:
       - "8081:8081"
-    depends_on:
-      - redis
+    environment:
+      - REDIS_HOST=cache
 
-  redis:
-    image: redis:latest
-    ports:
-      - "6379:6379"
+  cache:
+    image: redis:7-alpine
