@@ -1,81 +1,41 @@
-from flask import Flask, request, jsonify
-import requests
-from datetime import datetime
+import os
+from flask import Flask, jsonify, request
+import redis
 
 app = Flask(__name__)
 
-OLLAMA_URL = "http://172.17.0.1:11434/api/generate"
-OLLAMA_MODEL = "llama3.2:3b"
+r = redis.Redis(host=os.environ.get("REDIS_HOST", "localhost"), port=6379)
 
-
-def build_prompt(user_input: str) -> str:
-    return (
-        "Jsi finanční poradce. "
-        "Odpovídej pouze česky. "
-        "Odpovídej stručně a srozumitelně, maximálně 3 věty. "
-        "Drž se tématu peněz, úspor, nákupů a finanční rezervy. "
-        "Když je dotaz o nákupu, spočítej i kolik peněz zbyde. "
-        f"Dotaz: {user_input}"
-    )
-
-
-@app.route("/ping", methods=["GET"])
+@app.route("/ping")
 def ping():
-    return "pong", 200
+    return "pong"
 
-
-@app.route("/status", methods=["GET"])
+@app.route("/status")
 def status():
-    return jsonify({
-        "author": "Maksym",
-        "status": "ok",
-        "time": datetime.now().isoformat(),
-        "model": OLLAMA_MODEL
-    }), 200
-
+    try:
+        r.ping()
+        return jsonify({"redis": "cache", "status": "ok"})
+    except Exception:
+        return jsonify({"redis": "cache", "status": "error"})
 
 @app.route("/ai", methods=["POST"])
 def ai():
-    try:
-        data = request.get_json(silent=True)
+    data = request.get_json()
 
-        if not data or "prompt" not in data:
-            return jsonify({"error": "Chybí JSON nebo klíč 'prompt'."}), 400
+    if not data or "prompt" not in data:
+        return jsonify({"error": "missing prompt"}), 400
 
-        user_input = str(data["prompt"]).strip()
-        if not user_input:
-            return jsonify({"error": "Prompt je prázdný."}), 400
+    prompt = data["prompt"]
 
-        prompt = build_prompt(user_input)
+    vysledek = f"Processed: {prompt}"
 
-        r = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False
-            },
-            timeout=900
-        )
+    r.incr("requests")
 
-        r.raise_for_status()
-        llm_data = r.json()
-        answer = llm_data.get("response", "").strip()
-
-        return jsonify({
-            "answer": answer if answer else "Model nevrátil odpověď."
-        }), 200
-
-    except requests.exceptions.RequestException as e:
-        return jsonify({
-            "error": f"Chyba komunikace s Ollamou: {str(e)}"
-        }), 500
-
-    except Exception as e:
-        return jsonify({
-            "error": f"Neočekávaná chyba: {str(e)}"
-        }), 500
-
+    return jsonify({
+        "prompt": prompt,
+        "answer": vysledek,
+        "requests_total": int(r.get("requests") or 0)
+    })
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8081)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8081)))
