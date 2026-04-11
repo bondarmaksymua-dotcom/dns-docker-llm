@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8081"
+    environment:
+      - REDIS_HOST=cache
+
+  cache:
+    image: redis:7-alpine
