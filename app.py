@@ -1,6 +1,7 @@
+import json
 import os
-from typing import Any
 
+import redis
 import requests
 from flask import Flask, jsonify, render_template_string, request
 
@@ -8,7 +9,10 @@ app = Flask(__name__)
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://kurim.ithope.eu/v1").rstrip("/")
-MODEL = os.environ.get("OPENAI_MODEL", "gemma3:27b")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gemma3:27b")
+REDIS_HOST = os.environ.get("REDIS_HOST", "cache")
+
+r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 
 HTML = """
 <!doctype html>
@@ -23,7 +27,6 @@ HTML = """
             max-width: 900px;
             margin: 40px auto;
             padding: 20px;
-            line-height: 1.5;
             background: #f8f9fb;
             color: #222;
         }
@@ -32,52 +35,40 @@ HTML = """
             border: 1px solid #ddd;
             border-radius: 10px;
             padding: 24px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.04);
         }
-        h1 { margin-top: 0; }
         textarea {
             width: 100%;
-            min-height: 140px;
-            padding: 12px;
+            min-height: 120px;
+            padding: 10px;
             font-size: 16px;
             box-sizing: border-box;
-            border: 1px solid #bbb;
-            border-radius: 8px;
-            resize: vertical;
         }
         button {
-            margin-top: 12px;
-            padding: 10px 18px;
+            margin-top: 10px;
+            padding: 10px 16px;
             font-size: 16px;
-            border: 0;
-            border-radius: 8px;
-            background: #2563eb;
-            color: white;
             cursor: pointer;
         }
-        button:hover { background: #1d4ed8; }
         .box {
             margin-top: 20px;
-            padding: 16px;
-            border: 1px solid #ddd;
-            background: #fafafa;
+            padding: 15px;
+            border: 1px solid #ccc;
+            background: #f7f7f7;
             border-radius: 8px;
-            white-space: pre-wrap;
         }
         .error {
-            border-color: #d33;
-            background: #fff5f5;
             color: #a00;
+            background: #fff3f3;
+            border-color: #d66;
+        }
+        .history-item {
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #ddd;
         }
         .small {
-            margin-top: 20px;
-            color: #555;
+            color: #666;
             font-size: 14px;
-        }
-        code {
-            background: #f1f1f1;
-            padding: 2px 6px;
-            border-radius: 4px;
         }
     </style>
 </head>
@@ -106,14 +97,29 @@ HTML = """
         </div>
         {% endif %}
 
-        <div class="small">
-            Dostupné endpointy: <code>/</code>, <code>/ping</code>, <code>/status</code>, <code>/ai</code>
+        <div class="box">
+            <strong>Počet dotazů:</strong> {{ total_requests }}
         </div>
+
+        <div class="box">
+            <strong>Poslední dotazy:</strong>
+            {% if history %}
+                {% for item in history %}
+                <div class="history-item">
+                    <div><strong>Dotaz:</strong> {{ item.prompt }}</div>
+                    <div><strong>Odpověď:</strong> {{ item.answer }}</div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p>Zatím žádná historie.</p>
+            {% endif %}
+        </div>
+
+        <p class="small">Dostupné endpointy: /, /ping, /status, /ai</p>
     </div>
 </body>
 </html>
 """
-
 
 def ask_ai(prompt: str) -> str:
     if not OPENAI_API_KEY:
@@ -124,15 +130,14 @@ def ask_ai(prompt: str) -> str:
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json",
     }
-    payload: dict[str, Any] = {
-        "model": MODEL,
+    payload = {
+        "model": OPENAI_MODEL,
         "messages": [
             {
                 "role": "system",
                 "content": (
                     "Jsi finanční AI asistent. Odpovídej stručně, srozumitelně a česky. "
-                    "Pomáhej s běžnými osobními financemi, rozpočtem, spořením a jednoduchými výpočty. "
-                    "Neuváděj smyšlené údaje."
+                    "Pomáhej s běžnými osobními financemi, rozpočtem, spořením a jednoduchými výpočty."
                 ),
             },
             {
@@ -146,35 +151,35 @@ def ask_ai(prompt: str) -> str:
     response = requests.post(url, headers=headers, json=payload, timeout=60)
     response.raise_for_status()
     data = response.json()
+    return data["choices"][0]["message"]["content"].strip()
 
-    try:
-        return data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError):
-        return "AI vrátila nečekanou odpověď."
+def save_to_redis(prompt: str, answer: str) -> None:
+    item = json.dumps({"prompt": prompt, "answer": answer}, ensure_ascii=False)
+    r.incr("requests_total")
+    r.lpush("history", item)
+    r.ltrim("history", 0, 4)
 
+def get_history():
+    items = r.lrange("history", 0, 4)
+    return [json.loads(item) for item in items]
 
-@app.route("/ping", methods=["GET"])
+@app.route("/ping")
 def ping():
     return "pong"
 
-
-@app.route("/status", methods=["GET"])
+@app.route("/status")
 def status():
-    return jsonify(
-        {
-            "status": "ok",
-            "redis": "cache",
-            "model": MODEL,
-            "base_url": OPENAI_BASE_URL,
-            "api_key_loaded": bool(OPENAI_API_KEY),
-        }
-    )
-
+    return jsonify({
+        "status": "ok",
+        "redis": "cache",
+        "model": OPENAI_MODEL,
+        "api_key_loaded": bool(OPENAI_API_KEY),
+        "requests_total": int(r.get("requests_total") or 0)
+    })
 
 @app.route("/ai", methods=["POST"])
 def ai():
     data = request.get_json(silent=True)
-
     if not data or "prompt" not in data:
         return jsonify({"error": "missing prompt"}), 400
 
@@ -184,12 +189,10 @@ def ai():
 
     try:
         answer = ask_ai(prompt)
+        save_to_redis(prompt, answer)
         return jsonify({"prompt": prompt, "answer": answer})
-    except requests.RequestException as e:
-        return jsonify({"error": f"AI request failed: {str(e)}"}), 500
     except Exception as e:
-        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
-
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/", methods=["GET", "POST"])
 def home():
@@ -204,13 +207,21 @@ def home():
         else:
             try:
                 answer = ask_ai(prompt)
-            except requests.RequestException as e:
-                error = f"AI request failed: {str(e)}"
+                save_to_redis(prompt, answer)
             except Exception as e:
-                error = f"Unexpected error: {str(e)}"
+                error = str(e)
 
-    return render_template_string(HTML, prompt=prompt, answer=answer, error=error)
+    history = get_history()
+    total_requests = int(r.get("requests_total") or 0)
 
+    return render_template_string(
+        HTML,
+        prompt=prompt,
+        answer=answer,
+        error=error,
+        history=history,
+        total_requests=total_requests
+    )
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8081)))
