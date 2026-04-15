@@ -1,94 +1,58 @@
 import os, json, redis, requests
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, render_template_string
 
 app = Flask(__name__)
+r = redis.Redis(host=os.getenv("REDIS_HOST", "cache"), decode_responses=True)
 
-API_KEY = os.getenv("OPENAI_API_KEY", "")
-BASE_URL = os.getenv("OPENAI_BASE_URL", "https://kurim.ithope.eu/v1").rstrip("/")
+API = os.getenv("OPENAI_BASE_URL", "https://kurim.ithope.eu/v1")
+KEY = os.getenv("OPENAI_API_KEY", "")
 MODEL = os.getenv("OPENAI_MODEL", "gemma3:27b")
-
-r = redis.Redis(host=os.getenv("REDIS_HOST", "cache"), port=6379, decode_responses=True)
 
 HTML = """
 <h1>Finanční AI asistent</h1>
 
 <form method="post">
-  <textarea name="prompt" rows="4" cols="50">{{prompt}}</textarea><br>
-  <button>Odeslat</button>
+<textarea name="p">{{p}}</textarea><br>
+<button>Odeslat</button>
 </form>
 
-{% if answer %}
-<p><b>Odpověď:</b> {{answer}}</p>
-{% endif %}
+{% if a %}<p><b>Odpověď:</b> {{a}}</p>{% endif %}
+{% if e %}<p style="color:red">{{e}}</p>{% endif %}
 
-{% if error %}
-<p style="color:red;"><b>Chyba:</b> {{error}}</p>
-{% endif %}
+<p>Počet: {{t}}</p>
 
-<p><b>Počet dotazů:</b> {{total}}</p>
-
-<h3>Historie:</h3>
-{% for i in history %}
-<p><b>Dotaz:</b> {{i.prompt}}<br>
-<b>Odpověď:</b> {{i.answer}}</p>
-{% else %}
-<p>Žádná historie</p>
+{% for i in h %}
+<p>{{i.prompt}} → {{i.answer}}</p>
 {% endfor %}
 """
 
-def ask_ai(prompt):
-    res = requests.post(
-        f"{BASE_URL}/chat/completions",
-        headers={"Authorization": f"Bearer {API_KEY}"},
-        json={
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": "Jsi finanční AI asistent. Odpovídej česky."},
-                {"role": "user", "content": prompt}
-            ]
-        }
+def ai(p):
+    r = requests.post(
+        f"{API}/chat/completions",
+        headers={"Authorization": f"Bearer {KEY}"},
+        json={"model": MODEL, "messages":[{"role":"user","content":p}]}
     )
-    res.raise_for_status()
-    return res.json()["choices"][0]["message"]["content"]
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"]
 
-def save(prompt, answer):
-    r.incr("requests_total")
-    r.lpush("history", json.dumps({"prompt": prompt, "answer": answer}))
-    r.ltrim("history", 0, 4)
-
-def history():
-    return [json.loads(x) for x in r.lrange("history", 0, 4)]
-
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET","POST"])
 def home():
-    prompt = answer = error = ""
+    p = a = e = ""
     if request.method == "POST":
-        prompt = request.form.get("prompt", "")
-        if prompt:
+        p = request.form.get("p","")
+        if p:
             try:
-                answer = ask_ai(prompt)
-                save(prompt, answer)
-            except Exception as e:
-                error = str(e)
+                a = ai(p)
+                r.incr("t")
+                r.lpush("h", json.dumps({"prompt":p,"answer":a}))
+                r.ltrim("h",0,4)
+            except Exception as x:
+                e = str(x)
         else:
-            error = "Zadej dotaz."
+            e = "Zadej dotaz"
 
-    return render_template_string(
-        HTML,
-        prompt=prompt,
-        answer=answer,
-        error=error,
-        history=history(),
-        total=int(r.get("requests_total") or 0)
-    )
-
-@app.route("/status")
-def status():
-    return jsonify({"status": "ok"})
-
-@app.route("/ping")
-def ping():
-    return "pong"
+    h = [json.loads(x) for x in r.lrange("h",0,4)]
+    return render_template_string(HTML, p=p, a=a, e=e, h=h, t=int(r.get("t") or 0))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8081)
